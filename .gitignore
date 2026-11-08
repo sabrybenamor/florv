@@ -1,0 +1,21 @@
+# Vivado generated output (project is regenerated from vivado/*.tcl, never committed)
+*.runs/
+*.cache/
+*.hw/
+*.sim/
+*.gen/
+*.srcs/
+*.ip_user_files/
+.Xil/
+*.jou
+*.log
+*.str
+vivado/proj/
+vivado/out/
+*.xsa
+
+# Vitis workspace (created in task 1.6)
+arm/workspace/
+
+# CMake build output
+build/

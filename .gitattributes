@@ -1,0 +1,15 @@
+# Normalise text files on commit; checkout follows core.autocrlf
+* text=auto
+
+# Scripts run under WSL2 (bash) and Vivado batch mode: always LF
+*.sh  text eol=lf
+*.tcl text eol=lf
+*.ld  text eol=lf
+*.S   text eol=lf
+
+# Binaries that text=auto must never touch
+*.elf  binary
+*.bin  binary
+*.xsa  binary
+*.png  binary
+*.xlsx binary
