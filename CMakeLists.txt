@@ -40,3 +40,9 @@ file(GLOB FLORV_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/tests/unit/*
 
 add_executable(florv_tests ${FLORV_TEST_SOURCES})
 target_link_libraries(florv_tests PRIVATE florv_core doctest florv_warnings)
+
+# ---------------------------------------------------------------------------
+# CTest: one registered test that runs the whole doctest executable.
+# ---------------------------------------------------------------------------
+enable_testing()
+add_test(NAME unit COMMAND florv_tests)
