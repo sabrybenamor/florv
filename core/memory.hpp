@@ -5,6 +5,8 @@
 
 namespace florv {
 
+class ElfImage;
+
 enum class MemStatus : std::uint8_t {
     Ok,
     OutOfRange,
@@ -30,6 +32,9 @@ public:
     MemStatus write8(std::uint32_t addr, std::uint8_t value);
     MemStatus write16(std::uint32_t addr, std::uint16_t value);
     MemStatus write32(std::uint32_t addr, std::uint32_t value);
+
+
+    MemStatus loadSegments(const ElfImage& image);
 
     std::uint32_t base() const { return base_; }
     std::uint32_t size() const { return size_; }

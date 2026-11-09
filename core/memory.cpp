@@ -1,5 +1,9 @@
 #include "memory.hpp"
 
+#include <cstring>
+
+#include "elf_image.hpp"
+
 namespace florv {
 
 Memory::Memory(std::uint32_t base, std::uint32_t size)
@@ -83,6 +87,26 @@ MemStatus Memory::write32(std::uint32_t addr, std::uint32_t value) {
     bytes_[off + 1] = static_cast<std::uint8_t>(value >> 8);
     bytes_[off + 2] = static_cast<std::uint8_t>(value >> 16);
     bytes_[off + 3] = static_cast<std::uint8_t>(value >> 24);
+    return MemStatus::Ok;
+}
+
+MemStatus Memory::loadSegments(const ElfImage& image) {
+    // First pass: check every segment, so that a failed load changes nothing.
+    for (std::size_t i = 0; i < image.segmentCount(); ++i) {
+        const ElfSegment& segment = image.segment(i);
+        const std::uint32_t off = segment.vaddr - base_;
+        if (segment.memsz > size_ || off > size_ - segment.memsz) {
+            return MemStatus::OutOfRange;
+        }
+    }
+    // ElfImage guarantees that the file bytes are no longer than memsz.
+    for (std::size_t i = 0; i < image.segmentCount(); ++i) {
+        const ElfSegment& segment = image.segment(i);
+        std::uint8_t* dest = bytes_.data() + (segment.vaddr - base_);
+        const std::size_t filesz = segment.bytes.size;
+        std::memcpy(dest, segment.bytes.data, filesz);
+        std::memset(dest + filesz, 0, segment.memsz - filesz);
+    }
     return MemStatus::Ok;
 }
 
