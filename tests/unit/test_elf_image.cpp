@@ -97,6 +97,111 @@ bool accepted(const Bytes& b) {
     return ElfImage::parse(view(b)).has_value();
 }
 
+// Offsets inside the ELF32 header, a section header and a symbol table entry.
+constexpr std::size_t kEShoff = 32;
+constexpr std::size_t kEShentsize = 46;
+constexpr std::size_t kEShnum = 48;
+constexpr std::size_t kShdrSize = 40;
+constexpr std::size_t kShType = 4;
+constexpr std::size_t kShOffset = 16;
+constexpr std::size_t kShSize = 20;
+constexpr std::size_t kShLink = 24;
+constexpr std::size_t kShEntsize = 36;
+constexpr std::size_t kSymSize = 16;
+constexpr std::size_t kStName = 0;
+constexpr std::size_t kStValue = 4;
+constexpr std::size_t kStShndx = 14;
+
+// Section numbers in the file built by makeSymbolElf().
+constexpr std::size_t kSecText = 1;
+constexpr std::size_t kSecSymtab = 2;
+constexpr std::size_t kSecStrtab = 3;
+constexpr std::size_t kSectionCount = 4;
+
+struct TestSymbol {
+    const char* name;
+    std::uint32_t value;
+    std::uint16_t section;  // 0 means undefined
+};
+
+// Symbol table entry 0 is the empty one every ELF has, so these are entries 1 to 6.
+// The second is a section symbol: defined, but with no name, as linkers emit them.
+// end_signature is last, so its name ends the string table.
+constexpr TestSymbol kSymbols[] = {
+    {"_start", 0x80000000u, kSecText},
+    {"", 0x80000000u, kSecText},
+    {"tohost", 0x80001000u, kSecText},
+    {"begin_signature", 0x80002000u, kSecText},
+    {"extern_hook", 0x12345678u, 0},
+    {"end_signature", 0x80002040u, kSecText},
+};
+constexpr std::size_t kSymbolCount = sizeof(kSymbols) / sizeof(kSymbols[0]);
+constexpr std::size_t kTohostEntry = 3;
+
+struct SymbolElf {
+    Bytes bytes;
+    std::size_t strtab = 0;  // file offset of the string table
+    std::size_t strtabSize = 0;
+    std::size_t symtab = 0;  // file offset of the symbol table
+    std::size_t symtabSize = 0;
+    std::size_t shdrs = 0;  // file offset of the section header table
+
+    std::size_t shdr(std::size_t section) const { return shdrs + section * kShdrSize; }
+    std::size_t sym(std::size_t entry) const { return symtab + entry * kSymSize; }
+};
+
+// makeElf(1) followed by a string table, a symbol table and four section headers:
+// the empty one, a .text-style section, the symbol table and the string table.
+SymbolElf makeSymbolElf() {
+    SymbolElf elf;
+    Bytes& b = elf.bytes;
+    b = makeElf(1);
+
+    elf.strtab = b.size();
+    std::size_t nameOffset[kSymbolCount] = {};
+    b.push_back(0);
+    for (std::size_t i = 0; i < kSymbolCount; ++i) {
+        if (kSymbols[i].name[0] == '\0') {
+            continue;  // name offset 0, the empty string every string table starts with
+        }
+        nameOffset[i] = b.size() - elf.strtab;
+        for (const char* c = kSymbols[i].name; *c != '\0'; ++c) {
+            b.push_back(static_cast<std::uint8_t>(*c));
+        }
+        b.push_back(0);
+    }
+    elf.strtabSize = b.size() - elf.strtab;
+
+    elf.symtab = b.size();
+    elf.symtabSize = (kSymbolCount + 1) * kSymSize;
+    b.resize(b.size() + elf.symtabSize, 0);
+    for (std::size_t i = 0; i < kSymbolCount; ++i) {
+        const std::size_t entry = elf.sym(i + 1);
+        put32(b, entry + kStName, static_cast<std::uint32_t>(nameOffset[i]));
+        put32(b, entry + kStValue, kSymbols[i].value);
+        put16(b, entry + kStShndx, kSymbols[i].section);
+    }
+
+    elf.shdrs = b.size();
+    b.resize(b.size() + kSectionCount * kShdrSize, 0);
+    put32(b, elf.shdr(kSecText) + kShType, 1);
+    put32(b, elf.shdr(kSecText) + kShOffset, static_cast<std::uint32_t>(kEhdrSize + 2 * kPhdrSize));
+    put32(b, elf.shdr(kSecText) + kShSize, kSegmentBytes);
+    put32(b, elf.shdr(kSecSymtab) + kShType, 2);
+    put32(b, elf.shdr(kSecSymtab) + kShOffset, static_cast<std::uint32_t>(elf.symtab));
+    put32(b, elf.shdr(kSecSymtab) + kShSize, static_cast<std::uint32_t>(elf.symtabSize));
+    put32(b, elf.shdr(kSecSymtab) + kShLink, static_cast<std::uint32_t>(kSecStrtab));
+    put32(b, elf.shdr(kSecSymtab) + kShEntsize, static_cast<std::uint32_t>(kSymSize));
+    put32(b, elf.shdr(kSecStrtab) + kShType, 3);
+    put32(b, elf.shdr(kSecStrtab) + kShOffset, static_cast<std::uint32_t>(elf.strtab));
+    put32(b, elf.shdr(kSecStrtab) + kShSize, static_cast<std::uint32_t>(elf.strtabSize));
+
+    put32(b, kEShoff, static_cast<std::uint32_t>(elf.shdrs));
+    put16(b, kEShentsize, static_cast<std::uint16_t>(kShdrSize));
+    put16(b, kEShnum, static_cast<std::uint16_t>(kSectionCount));
+    return elf;
+}
+
 }  // namespace
 
 TEST_CASE("ElfImage: a valid RV32 executable is accepted") {
@@ -271,5 +376,180 @@ TEST_CASE("ElfImage: the segment limit") {
     }
     SUBCASE("one more is rejected") {
         CHECK_FALSE(accepted(makeElf(ElfImage::kMaxSegments + 1)));
+    }
+}
+
+TEST_CASE("ElfImage: tohost and the signature bounds are found by name") {
+    const SymbolElf elf = makeSymbolElf();
+    const auto image = ElfImage::parse(view(elf.bytes));
+    REQUIRE(image.has_value());
+
+    CHECK(image->findSymbol("tohost") == 0x80001000u);
+    CHECK(image->findSymbol("begin_signature") == 0x80002000u);
+    CHECK(image->findSymbol("end_signature") == 0x80002040u);
+    CHECK(image->findSymbol("_start") == 0x80000000u);
+
+    // The symbol tables change nothing about the entry point and the segments.
+    CHECK(image->entry() == kEntry);
+    REQUIRE(image->segmentCount() == 1);
+    CHECK(image->segment(0).vaddr == 0x80000000u);
+}
+
+TEST_CASE("ElfImage: only an exact, defined name matches") {
+    const SymbolElf elf = makeSymbolElf();
+    const auto image = ElfImage::parse(view(elf.bytes));
+    REQUIRE(image.has_value());
+
+    SUBCASE("a name that is not in the file") {
+        CHECK_FALSE(image->findSymbol("fromhost").has_value());
+    }
+    SUBCASE("the start of a real name") {
+        CHECK_FALSE(image->findSymbol("tohos").has_value());
+        CHECK_FALSE(image->findSymbol("end").has_value());
+    }
+    SUBCASE("a real name with more after it") {
+        CHECK_FALSE(image->findSymbol("tohost2").has_value());
+        CHECK_FALSE(image->findSymbol("end_signature_").has_value());
+    }
+    SUBCASE("the tail of a real name") {
+        // "signature" is in the string table, inside both signature names,
+        // but no symbol's name starts there.
+        CHECK_FALSE(image->findSymbol("signature").has_value());
+    }
+    SUBCASE("the empty name") {
+        CHECK_FALSE(image->findSymbol("").has_value());
+    }
+    SUBCASE("an undefined symbol has no address") {
+        CHECK_FALSE(image->findSymbol("extern_hook").has_value());
+    }
+}
+
+TEST_CASE("ElfImage: a file without a symbol table parses and has no symbols") {
+    SUBCASE("no section header table") {
+        const Bytes file = makeElf(1);
+        const auto image = ElfImage::parse(view(file));
+        REQUIRE(image.has_value());
+        CHECK_FALSE(image->findSymbol("tohost").has_value());
+    }
+    SUBCASE("a section count of zero") {
+        SymbolElf elf = makeSymbolElf();
+        put16(elf.bytes, kEShnum, 0);
+        const auto image = ElfImage::parse(view(elf.bytes));
+        REQUIRE(image.has_value());
+        CHECK_FALSE(image->findSymbol("tohost").has_value());
+    }
+    SUBCASE("sections, but none is a symbol table") {
+        SymbolElf elf = makeSymbolElf();
+        put32(elf.bytes, elf.shdr(kSecSymtab) + kShType, 1);
+        const auto image = ElfImage::parse(view(elf.bytes));
+        REQUIRE(image.has_value());
+        CHECK_FALSE(image->findSymbol("tohost").has_value());
+    }
+}
+
+TEST_CASE("ElfImage: a section or symbol table that leaves the file is rejected") {
+    SymbolElf elf = makeSymbolElf();
+    Bytes& file = elf.bytes;
+    REQUIRE(accepted(file));
+    const std::size_t symtab = elf.shdr(kSecSymtab);
+    const std::size_t strtab = elf.shdr(kSecStrtab);
+
+    SUBCASE("section header entry size is not 40") {
+        put16(file, kEShentsize, 64);
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("section header table just past the end") {
+        put32(file, kEShoff, static_cast<std::uint32_t>(file.size()));
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("section header table near 4 GiB") {
+        put32(file, kEShoff, 0xFFFFFFF0u);
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("one section header more than the file holds") {
+        put16(file, kEShnum, static_cast<std::uint16_t>(kSectionCount + 1));
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("symbol entry size is not 16") {
+        put32(file, symtab + kShEntsize, 24);
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("symbol table offset near 4 GiB") {
+        put32(file, symtab + kShOffset, 0xFFFFFFF0u);
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("symbol table runs past the end of the file") {
+        put32(file, symtab + kShSize, static_cast<std::uint32_t>(file.size() - elf.symtab + 1));
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("string table link is not a section number") {
+        put32(file, symtab + kShLink, static_cast<std::uint32_t>(kSectionCount));
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("string table link is one past the table, where a string table header sits") {
+        // Bytes that would pass as a fifth section header, but the header count says four.
+        const Bytes extra(file.begin() + static_cast<std::ptrdiff_t>(strtab),
+                          file.begin() + static_cast<std::ptrdiff_t>(strtab + kShdrSize));
+        file.insert(file.end(), extra.begin(), extra.end());
+        put32(file, symtab + kShLink, static_cast<std::uint32_t>(kSectionCount));
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("string table link names a section that is not a string table") {
+        put32(file, symtab + kShLink, static_cast<std::uint32_t>(kSecText));
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("string table offset near 4 GiB") {
+        put32(file, strtab + kShOffset, 0xFFFFFFF0u);
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("string table runs past the end of the file") {
+        put32(file, strtab + kShSize, static_cast<std::uint32_t>(file.size() - elf.strtab + 1));
+        CHECK_FALSE(accepted(file));
+    }
+    SUBCASE("every shorter length") {
+        std::size_t acceptedCount = 0;
+        for (std::size_t length = 0; length < file.size(); ++length) {
+            const Bytes cut(file.begin(), file.begin() + static_cast<std::ptrdiff_t>(length));
+            if (accepted(cut)) {
+                ++acceptedCount;
+            }
+        }
+        CHECK(acceptedCount == 0);
+    }
+}
+
+TEST_CASE("ElfImage: a bad name in the symbol table matches nothing and harms nothing") {
+    SymbolElf elf = makeSymbolElf();
+    Bytes& file = elf.bytes;
+
+    SUBCASE("name offset at the end of the string table") {
+        put32(file, elf.sym(kTohostEntry) + kStName, static_cast<std::uint32_t>(elf.strtabSize));
+        const auto image = ElfImage::parse(view(file));
+        REQUIRE(image.has_value());
+        CHECK_FALSE(image->findSymbol("tohost").has_value());
+        CHECK(image->findSymbol("end_signature") == 0x80002040u);
+    }
+    SUBCASE("name offset near 4 GiB") {
+        put32(file, elf.sym(kTohostEntry) + kStName, 0xFFFFFFF0u);
+        const auto image = ElfImage::parse(view(file));
+        REQUIRE(image.has_value());
+        CHECK_FALSE(image->findSymbol("tohost").has_value());
+        CHECK(image->findSymbol("begin_signature") == 0x80002000u);
+    }
+    SUBCASE("last name has no terminator inside the string table") {
+        // The string table now ends on the final 'e' of end_signature. The byte after it
+        // in the file is still zero, so a lookup that read past the table would match.
+        put32(file, elf.shdr(kSecStrtab) + kShSize, static_cast<std::uint32_t>(elf.strtabSize - 1));
+        const auto image = ElfImage::parse(view(file));
+        REQUIRE(image.has_value());
+        CHECK_FALSE(image->findSymbol("end_signature").has_value());
+        CHECK(image->findSymbol("tohost") == 0x80001000u);
+    }
+    SUBCASE("symbol table cut in the middle of its last entry") {
+        put32(file, elf.shdr(kSecSymtab) + kShSize, static_cast<std::uint32_t>(elf.symtabSize - 8));
+        const auto image = ElfImage::parse(view(file));
+        REQUIRE(image.has_value());
+        CHECK_FALSE(image->findSymbol("end_signature").has_value());
+        CHECK(image->findSymbol("tohost") == 0x80001000u);
     }
 }

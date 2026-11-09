@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <string_view>
 
 #include "byte_view.hpp"
 
@@ -33,12 +34,20 @@ public:
     
     const ElfSegment& segment(std::size_t index) const { return segments_[index]; }
 
+    
+    std::optional<std::uint32_t> findSymbol(std::string_view name) const;
+
 private:
     ElfImage() = default;
+
+    bool readSegments(ByteView file);
+    bool readSymbols(ByteView file);
 
     std::uint32_t entry_ = 0;
     std::size_t segmentCount_ = 0;
     std::array<ElfSegment, kMaxSegments> segments_{};
+    ByteView symtab_;
+    ByteView strtab_;
 };
 
 }  
