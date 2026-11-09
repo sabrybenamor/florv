@@ -19,3 +19,4 @@ arm/workspace/
 
 # CMake build output
 build/
+.vscode/

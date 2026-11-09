@@ -10,7 +10,7 @@ void MmioRegion::check(std::size_t offset) const {
         xil_printf("\r\nFATAL: MmioRegion access at offset 0x%x outside region 0x%x (size 0x%x) or misaligned\r\n",
                    static_cast<unsigned>(offset), static_cast<unsigned>(base_), static_cast<unsigned>(size_));
         for (;;) {
-        }  // stop here: a bad register address is a programming error, never continue
+        }  // stop a bad register address is a programming error, never continue
     }
 }
 
