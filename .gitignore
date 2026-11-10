@@ -21,6 +21,11 @@ arm/workspace/
 build/
 .vscode/
 
+# xsim simulation output (xvhdl, xelab, xsim)
+xsim.dir/
+*.pb
+*.wdb
+
 # Python
 __pycache__/
 .pytest_cache/
