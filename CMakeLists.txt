@@ -51,6 +51,44 @@ enable_testing()
 add_test(NAME unit COMMAND florv_tests)
 
 # ---------------------------------------------------------------------------
+# CLI tests: run the real florv and check its exit code (see host/main.cpp for
+# the codes). tests/cli/run_florv.cmake does the checking; arguments are
+# separated by | in ARGS.
+#   florv_cli_test(<name> <expected exit code> <ARGS> [text florv must print])
+# ---------------------------------------------------------------------------
+set(FLORV_DATA "${CMAKE_SOURCE_DIR}/tests/data")
+
+function(florv_cli_test name expected_exit arguments)
+    set(extra "")
+    if(ARGC GREATER 3)
+        set(extra "-DEXPECT_STDOUT=${ARGV3}")
+    endif()
+    add_test(NAME cli.${name}
+             COMMAND ${CMAKE_COMMAND}
+                     "-DFLORV=$<TARGET_FILE:florv>"
+                     "-DARGS=${arguments}"
+                     "-DEXPECT_EXIT=${expected_exit}"
+                     ${extra}
+                     -P "${CMAKE_SOURCE_DIR}/tests/cli/run_florv.cmake")
+endfunction()
+
+# 0: halted with tohost 1.
+florv_cli_test(pass          0 "iss|${FLORV_DATA}/minimal.elf" "tohost:  1")
+# 1: halted with another tohost value.
+florv_cli_test(fail_tohost   1 "iss|${FLORV_DATA}/fail.elf" "tohost:  2")
+# 2: the step limit, and a trap.
+florv_cli_test(step_limit    2 "iss|${FLORV_DATA}/minimal.elf|--max-steps|3" "status:  step limit")
+florv_cli_test(trap          2 "iss|${FLORV_DATA}/trap.elf" "status:  trap")
+florv_cli_test(trap_location 2 "iss|${FLORV_DATA}/trap.elf" "trap at: pc=80000004 insn=ffffffff")
+# 3: a file that is not there, and a file that is not an ELF.
+florv_cli_test(missing_file  3 "iss|${FLORV_DATA}/no_such_file.elf")
+florv_cli_test(not_an_elf    3 "iss|${FLORV_DATA}/minimal.S")
+# 4: wrong command lines.
+florv_cli_test(no_arguments  4 "")
+florv_cli_test(no_elf_given  4 "iss")
+florv_cli_test(bad_max_steps 4 "iss|${FLORV_DATA}/minimal.elf|--max-steps|many")
+
+# ---------------------------------------------------------------------------
 # arm-check: compile every core/*.cpp for the Cortex-A9, compile only, no link.
 # Proves core/ stays buildable for the bare-metal ARM: -fno-exceptions makes any
 # throw or try an error, -fno-rtti does the same for dynamic_cast and typeid.
