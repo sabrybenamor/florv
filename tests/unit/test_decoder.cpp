@@ -184,3 +184,104 @@ TEST_CASE("decode: FENCE, ECALL and EBREAK carry only op and raw") {
     CHECK(ebreak.rs2 == 0);
     CHECK(ebreak.imm == 0);
 }
+
+// ---------------------------------------------------------------------------
+// One case per instruction: the 37 computational, memory and control
+// instructions. The words are the objdump output for tests/data/decode_cases.S,
+// in the same order, assembled at 0x80000000. A branch or jump offset is the
+// target address minus the instruction's own address; both are in the text.
+// ---------------------------------------------------------------------------
+namespace {
+
+struct Case {
+    std::uint32_t word;
+    Op op;
+    int rd;
+    int rs1;
+    int rs2;
+    std::int32_t imm;
+    const char* text;  // the objdump line the word came from
+};
+
+// A field the instruction does not have is expected to be 0.
+const Case kCases[] = {
+    // Upper immediate and jumps
+    {0x123452B7u, Op::Lui, 5, 0, 0, 0x12345000, "lui x5,0x12345"},
+    {0xABCDE897u, Op::Auipc, 17, 0, 0, -0x54322000, "auipc x17,0xabcde"},  // 0xABCDE000
+    {0x08C000EFu, Op::Jal, 1, 0, 0, 140, "80000008: jal x1,80000094"},
+    {0x123A04E7u, Op::Jalr, 9, 20, 0, 291, "jalr x9,291(x20)"},
+
+    // Branches
+    {0xFF5308E3u, Op::Beq, 0, 6, 21, -16, "80000010: beq x6,x21,80000000"},
+    {0x087B1063u, Op::Bne, 0, 22, 7, 128, "80000014: bne x22,x7,80000094"},
+    {0xFF7444E3u, Op::Blt, 0, 8, 23, -24, "80000018: blt x8,x23,80000000"},
+    {0x06AC5C63u, Op::Bge, 0, 24, 10, 120, "8000001c: bge x24,x10,80000094"},
+    {0xFF95E0E3u, Op::Bltu, 0, 11, 25, -32, "80000020: bltu x11,x25,80000000"},
+    {0x06CD7863u, Op::Bgeu, 0, 26, 12, 112, "80000024: bgeu x26,x12,80000094"},
+
+    // Loads
+    {0xEDDD8683u, Op::Lb, 13, 27, 0, -291, "lb x13,-291(x27)"},
+    {0x45671E03u, Op::Lh, 28, 14, 0, 1110, "lh x28,1110(x14)"},
+    {0xBAAEA783u, Op::Lw, 15, 29, 0, -1110, "lw x15,-1110(x29)"},
+    {0x04D84F03u, Op::Lbu, 30, 16, 0, 77, "lbu x30,77(x16)"},
+    {0xFB3FD883u, Op::Lhu, 17, 31, 0, -77, "lhu x17,-77(x31)"},
+
+    // Stores
+    {0x132181A3u, Op::Sb, 0, 3, 18, 291, "sb x18,291(x3)"},
+    {0xEC499EA3u, Op::Sh, 0, 19, 4, -291, "sh x4,-291(x19)"},
+    {0x4542AB23u, Op::Sw, 0, 5, 20, 1110, "sw x20,1110(x5)"},
+
+    // Register-immediate
+    {0xB2EA8313u, Op::Addi, 6, 21, 0, -1234, "addi x6,x21,-1234"},
+    {0x4D23AB13u, Op::Slti, 22, 7, 0, 1234, "slti x22,x7,1234"},
+    {0xDC9BB413u, Op::Sltiu, 8, 23, 0, -567, "sltiu x8,x23,-567"},
+    {0x2374CC13u, Op::Xori, 24, 9, 0, 567, "xori x24,x9,567"},
+    {0xFA7CE513u, Op::Ori, 10, 25, 0, -89, "ori x10,x25,-89"},
+    {0x0595FD13u, Op::Andi, 26, 11, 0, 89, "andi x26,x11,89"},
+    {0x013D9613u, Op::Slli, 12, 27, 0, 19, "slli x12,x27,0x13"},
+    {0x00D6DE13u, Op::Srli, 28, 13, 0, 13, "srli x28,x13,0xd"},
+    {0x41BED713u, Op::Srai, 14, 29, 0, 27, "srai x14,x29,0x1b"},
+
+    // Register-register
+    {0x01078F33u, Op::Add, 30, 15, 16, 0, "add x30,x15,x16"},
+    {0x402F88B3u, Op::Sub, 17, 31, 2, 0, "sub x17,x31,x2"},
+    {0x013911B3u, Op::Sll, 3, 18, 19, 0, "sll x3,x18,x19"},
+    {0x00522A33u, Op::Slt, 20, 4, 5, 0, "slt x20,x4,x5"},
+    {0x016AB333u, Op::Sltu, 6, 21, 22, 0, "sltu x6,x21,x22"},
+    {0x0083CBB3u, Op::Xor, 23, 7, 8, 0, "xor x23,x7,x8"},
+    {0x019C54B3u, Op::Srl, 9, 24, 25, 0, "srl x9,x24,x25"},
+    {0x40B55D33u, Op::Sra, 26, 10, 11, 0, "sra x26,x10,x11"},
+    {0x01CDE633u, Op::Or, 12, 27, 28, 0, "or x12,x27,x28"},
+    {0x00E6FEB3u, Op::And, 29, 13, 14, 0, "and x29,x13,x14"},
+};
+
+}  // namespace
+
+TEST_CASE("decode: every computational, memory and control instruction") {
+    // 37 rows, and no instruction listed twice: together these mean none is missing.
+    CHECK(sizeof(kCases) / sizeof(kCases[0]) == 37);
+    bool seen[256] = {};
+    for (const Case& c : kCases) {
+        CAPTURE(c.text);
+        CHECK_FALSE(seen[static_cast<std::uint8_t>(c.op)]);
+        seen[static_cast<std::uint8_t>(c.op)] = true;
+    }
+
+    for (const Case& c : kCases) {
+        CAPTURE(c.text);  // a failure prints which instruction it was
+        const Instruction got = decode(c.word);
+        CHECK(got.op == c.op);
+        CHECK(got.rd == c.rd);
+        CHECK(got.rs1 == c.rs1);
+        CHECK(got.rs2 == c.rs2);
+        CHECK(got.imm == c.imm);
+        CHECK(got.raw == c.word);
+    }
+}
+
+TEST_CASE("decode: JAL backwards, the last line of decode_cases.S") {
+    const Instruction jal = decode(0xF6DFF06Fu);  // 80000094: jal x0,80000000
+    CHECK(jal.op == Op::Jal);
+    CHECK(jal.rd == 0);
+    CHECK(jal.imm == -148);
+}
