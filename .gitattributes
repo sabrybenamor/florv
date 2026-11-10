@@ -7,6 +7,9 @@
 *.ld  text eol=lf
 *.S   text eol=lf
 
+# Windows batch files: cmd can lose track of goto labels in a file with LF endings
+*.bat text eol=crlf
+
 # Binaries that text=auto must never touch
 *.elf  binary
 *.bin  binary

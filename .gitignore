@@ -22,6 +22,7 @@ build/
 .vscode/
 
 # xsim simulation output (xvhdl, xelab, xsim)
+sim_out/
 xsim.dir/
 *.pb
 *.wdb
