@@ -20,3 +20,7 @@ arm/workspace/
 # CMake build output
 build/
 .vscode/
+
+# Python
+__pycache__/
+.pytest_cache/
