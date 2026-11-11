@@ -37,10 +37,15 @@ rem package is first, then rtl\, then the testbenches. Add one line per new file
 rem ---------------------------------------------------------------------------
 set FILES=
 set FILES=%FILES% "%ROOT%\rtl\rv32i_pkg.vhd"
+set FILES=%FILES% "%ROOT%\rtl\decode_pkg.vhd"
 set FILES=%FILES% "%ROOT%\rtl\regfile.vhd"
 set FILES=%FILES% "%ROOT%\rtl\alu.vhd"
+set FILES=%FILES% "%ROOT%\rtl\imm_gen.vhd"
+set FILES=%FILES% "%ROOT%\rtl\decode.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_regfile.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_alu.vhd"
+set FILES=%FILES% "%ROOT%\tb\tb_imm_gen.vhd"
+set FILES=%FILES% "%ROOT%\tb\tb_decode.vhd"
 
 set "OUT=%ROOT%\sim_out"
 if not exist "%OUT%" mkdir "%OUT%"
