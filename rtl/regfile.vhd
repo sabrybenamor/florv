@@ -30,6 +30,7 @@ architecture rtl of regfile is
 begin
 
     write_port : process (clk)
+    -- synchronous write
     begin
         if rising_edge(clk) then
             if we = '1' and waddr /= X0 then
@@ -37,7 +38,7 @@ begin
             end if;
         end if;
     end process write_port;
-
+    -- asynchronous read
     rdata1 <= (others => '0') when raddr1 = X0 else regs(to_integer(unsigned(raddr1)));
     rdata2 <= (others => '0') when raddr2 = X0 else regs(to_integer(unsigned(raddr2)));
 
