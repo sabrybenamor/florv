@@ -48,6 +48,7 @@ set FILES=%FILES% "%ROOT%\tb\tb_alu.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_imm_gen.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_decode.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_rv_core.vhd"
+set FILES=%FILES% "%ROOT%\tb\tb_rv_core_insns.vhd"
 
 set "OUT=%ROOT%\sim_out"
 if not exist "%OUT%" mkdir "%OUT%"
