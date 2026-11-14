@@ -7,6 +7,11 @@ rem
 rem The argument is the testbench entity. A testbench must print PASS when every
 rem check passed, and stop with "assert ... severity failure" when one did not.
 rem
+rem Arguments after the name set generics of the testbench. Quote each one,
+rem because cmd splits an unquoted argument at "=":
+rem
+rem     tools\sim.bat tb_core "HEX_FILE=C:/work/florv/tests/build/fib_loop.hex" "TOHOST_ADDR=800000c0"
+rem
 rem Exit codes: 0 the testbench printed PASS, 1 it failed or did not compile,
 rem             2 wrong usage or Vivado not found.
 rem
@@ -16,10 +21,20 @@ rem The log of a run is sim_out\NAME.log.
 setlocal
 
 if "%~1"=="" (
-    echo usage: tools\sim.bat TESTBENCH        for example: tools\sim.bat tb_alu
+    echo usage: tools\sim.bat TESTBENCH ["GENERIC=value" ...]      for example: tools\sim.bat tb_alu
     exit /b 2
 )
 set "NAME=%~1"
+
+rem Every further argument sets one generic of the testbench: "NAME=value".
+rem "shift /1" leaves %%0 alone; the plain form would lose the script's own path.
+set GENERICS=
+:next_generic
+shift /1
+if "%~1"=="" goto generics_done
+set GENERICS=%GENERICS% -generic_top "%~1"
+goto next_generic
+:generics_done
 for %%I in ("%~dp0..") do set "ROOT=%%~fI"
 
 rem xvhdl, xelab and xsim are not on the PATH; this Vivado script adds them.
@@ -49,6 +64,7 @@ set FILES=%FILES% "%ROOT%\tb\tb_imm_gen.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_decode.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_rv_core.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_rv_core_insns.vhd"
+set FILES=%FILES% "%ROOT%\tb\tb_core.vhd"
 
 set "OUT=%ROOT%\sim_out"
 if not exist "%OUT%" mkdir "%OUT%"
@@ -66,7 +82,7 @@ call xvhdl -2008 -nolog %FILES%
 if errorlevel 1 goto failed_compile
 
 echo sim: elaborating %NAME%
-call xelab -debug typical -nolog %NAME% -s %NAME%_sim
+call xelab -debug typical -nolog %GENERICS% %NAME% -s %NAME%_sim
 if errorlevel 1 goto failed_elaborate
 
 echo sim: running %NAME%
