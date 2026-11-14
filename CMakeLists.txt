@@ -88,6 +88,14 @@ florv_cli_test(no_arguments  4 "")
 florv_cli_test(no_elf_given  4 "iss")
 florv_cli_test(bad_max_steps 4 "iss|${FLORV_DATA}/minimal.elf|--max-steps|many")
 
+# elf2hex: 0 the file is written, 3 a bad ELF, 4 a wrong command line or an
+# output file that cannot be written (here: in a folder that does not exist).
+florv_cli_test(elf2hex            0 "elf2hex|${FLORV_DATA}/minimal.elf|${CMAKE_BINARY_DIR}/minimal.hex" "wrote 16384 words")
+florv_cli_test(elf2hex_missing    3 "elf2hex|${FLORV_DATA}/no_such_file.elf|${CMAKE_BINARY_DIR}/none.hex")
+florv_cli_test(elf2hex_not_an_elf 3 "elf2hex|${FLORV_DATA}/minimal.S|${CMAKE_BINARY_DIR}/none.hex")
+florv_cli_test(elf2hex_no_output  4 "elf2hex|${FLORV_DATA}/minimal.elf")
+florv_cli_test(elf2hex_bad_output 4 "elf2hex|${FLORV_DATA}/minimal.elf|${CMAKE_BINARY_DIR}/no_such_folder/out.hex")
+
 # ---------------------------------------------------------------------------
 # arm-check: compile every core/*.cpp for the Cortex-A9, compile only, no link.
 # Proves core/ stays buildable for the bare-metal ARM: -fno-exceptions makes any

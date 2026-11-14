@@ -4,12 +4,18 @@
 //
 // Runs an RV32I ELF in the instruction-set simulator until it halts, traps or reaches
 // the step limit, and optionally writes the CSV retire trace of docs/trace-format.md.
+//
+//   florv elf2hex prog.elf out.hex
+//
+// Writes the RAM as the ELF fills it to a text file a VHDL testbench can read: one
+// 32-bit word on each line.
 
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -23,11 +29,11 @@ namespace {
 
 // What the process returns. Scripts and ctest read these, not the printed text.
 enum ExitCode : int {
-    kExitPass = 0,     // halted with tohost equal to 1
+    kExitPass = 0,     // iss: halted with tohost equal to 1. elf2hex: the file is written
     kExitFail = 1,     // halted another way: another tohost value, ecall or ebreak
     kExitStopped = 2,  // step limit reached, or a trap
     kExitBadElf = 3,   // file unreadable, not a valid RV32 ELF, or it does not fit the RAM
-    kExitUsage = 4,    // wrong command line, or the trace file cannot be written
+    kExitUsage = 4,    // wrong command line, or the output file cannot be written
 };
 
 constexpr std::uint64_t kDefaultMaxSteps = 1000000;
@@ -35,13 +41,19 @@ constexpr std::uint64_t kDefaultMaxSteps = 1000000;
 void printUsage(std::FILE* out) {
     std::fprintf(out,
                  "usage: florv iss <prog.elf> [--max-steps N] [--trace out.csv]\n"
+                 "       florv elf2hex <prog.elf> <out.hex>\n"
                  "       florv --version\n"
                  "\n"
+                 "iss runs the program in the instruction-set simulator.\n"
                  "  --max-steps N   stop after N instructions (default %llu)\n"
                  "  --trace FILE    write the CSV retire trace to FILE\n"
                  "\n"
-                 "exit codes: 0 halted with tohost 1, 1 halted otherwise,\n"
-                 "            2 step limit or trap, 3 bad ELF, 4 bad command line\n",
+                 "elf2hex writes the RAM as the program fills it: one 32-bit word on each\n"
+                 "line, 8 hex digits, from the first word of the RAM to the last.\n"
+                 "\n"
+                 "exit codes: 0 halted with tohost 1 (elf2hex: file written), 1 halted\n"
+                 "            otherwise, 2 step limit or trap, 3 bad ELF,\n"
+                 "            4 bad command line or output file not writable\n",
                  static_cast<unsigned long long>(kDefaultMaxSteps));
 }
 
@@ -116,25 +128,35 @@ bool parseIssOptions(int count, char** args, IssOptions& options) {
     return true;
 }
 
+// Reads the ELF file at path into file, parses it and loads its segments into ram.
+// The image points into file, so file must live as long as the image is used.
+// On a failure it prints the reason and returns no image.
+std::optional<florv::ElfImage> loadElf(const std::string& path, std::vector<std::uint8_t>& file,
+                                       florv::Memory& ram) {
+    if (!readFile(path, file)) {
+        std::fprintf(stderr, "florv: cannot read %s\n", path.c_str());
+        return std::nullopt;
+    }
+
+    auto image = florv::ElfImage::parse(florv::ByteView{file.data(), file.size()});
+    if (!image) {
+        std::fprintf(stderr, "florv: %s is not a 32-bit RISC-V executable\n", path.c_str());
+        return std::nullopt;
+    }
+
+    if (ram.loadSegments(*image) != florv::MemStatus::Ok) {
+        std::fprintf(stderr, "florv: %s does not fit the RAM at %08x, %u bytes\n", path.c_str(),
+                     static_cast<unsigned>(ram.base()), static_cast<unsigned>(ram.size()));
+        return std::nullopt;
+    }
+    return image;
+}
+
 int runIss(const IssOptions& options) {
     std::vector<std::uint8_t> file;
-    if (!readFile(options.elfPath, file)) {
-        std::fprintf(stderr, "florv: cannot read %s\n", options.elfPath.c_str());
-        return kExitBadElf;
-    }
-
-    const auto image = florv::ElfImage::parse(florv::ByteView{file.data(), file.size()});
-    if (!image) {
-        std::fprintf(stderr, "florv: %s is not a 32-bit RISC-V executable\n",
-                     options.elfPath.c_str());
-        return kExitBadElf;
-    }
-
     static florv::Memory ram;  // 64 KiB, so not on the stack
-    if (ram.loadSegments(*image) != florv::MemStatus::Ok) {
-        std::fprintf(stderr, "florv: %s does not fit the RAM at %08x, %u bytes\n",
-                     options.elfPath.c_str(), static_cast<unsigned>(ram.base()),
-                     static_cast<unsigned>(ram.size()));
+    const auto image = loadElf(options.elfPath, file, ram);
+    if (!image) {
         return kExitBadElf;
     }
 
@@ -195,6 +217,43 @@ int runIss(const IssOptions& options) {
     return code;
 }
 
+// Writes every word of the RAM, loaded from the ELF, to hexPath: line 1 is the word at
+// the base of the RAM, line 2 the next one, and so on to the end of the RAM. A word is
+// 8 lower-case hex digits and is the value a 32-bit read gives, so the byte at the
+// lowest address is the last two digits and an instruction looks as objdump prints it.
+// What the ELF does not fill is 00000000.
+int runElf2Hex(const std::string& elfPath, const std::string& hexPath) {
+    std::vector<std::uint8_t> file;
+    static florv::Memory ram;  // 64 KiB, so not on the stack
+    if (!loadElf(elfPath, file, ram)) {
+        return kExitBadElf;
+    }
+
+    // "wb", not "w": line feeds only, on Windows too.
+    std::FILE* out = std::fopen(hexPath.c_str(), "wb");
+    if (out == nullptr) {
+        std::fprintf(stderr, "florv: cannot write %s\n", hexPath.c_str());
+        return kExitUsage;
+    }
+
+    std::uint32_t words = 0;
+    for (std::uint32_t offset = 0; offset < ram.size(); offset += 4) {
+        std::uint32_t word = 0;
+        ram.read32(ram.base() + offset, word);  // inside the RAM and aligned: cannot fail
+        std::fprintf(out, "%08x\n", static_cast<unsigned>(word));
+        ++words;
+    }
+
+    const bool writeFailed = std::ferror(out) != 0;
+    if (std::fclose(out) != 0 || writeFailed) {
+        std::fprintf(stderr, "florv: error writing %s\n", hexPath.c_str());
+        return kExitUsage;
+    }
+
+    std::printf("wrote %u words to %s\n", static_cast<unsigned>(words), hexPath.c_str());
+    return kExitPass;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -213,6 +272,15 @@ int main(int argc, char** argv) {
             return kExitUsage;
         }
         return runIss(options);
+    }
+    if (argc >= 2 && std::strcmp(argv[1], "elf2hex") == 0) {
+        // Exactly two file names and no option.
+        if (argc != 4 || argv[2][0] == '-' || argv[3][0] == '-') {
+            std::fprintf(stderr, "florv: elf2hex needs an ELF file and an output file\n");
+            printUsage(stderr);
+            return kExitUsage;
+        }
+        return runElf2Hex(argv[2], argv[3]);
     }
     printUsage(stderr);
     return kExitUsage;
