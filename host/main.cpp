@@ -1,9 +1,10 @@
 // florv: the PC command line tool.
 //
-//   florv iss prog.elf [--max-steps N] [--trace out.csv]
+//   florv iss prog.elf [--max-steps N] [--trace out.csv] [--regs out.txt]
 //
 // Runs an RV32I ELF in the instruction-set simulator until it halts, traps or reaches
-// the step limit, and optionally writes the CSV retire trace of docs/trace-format.md.
+// the step limit, and optionally writes the CSV retire trace of docs/trace-format.md
+// and the final registers in the format of docs/regs-format.md.
 //
 //   florv elf2hex prog.elf out.hex
 //
@@ -40,13 +41,14 @@ constexpr std::uint64_t kDefaultMaxSteps = 1000000;
 
 void printUsage(std::FILE* out) {
     std::fprintf(out,
-                 "usage: florv iss <prog.elf> [--max-steps N] [--trace out.csv]\n"
+                 "usage: florv iss <prog.elf> [--max-steps N] [--trace out.csv] [--regs out.txt]\n"
                  "       florv elf2hex <prog.elf> <out.hex>\n"
                  "       florv --version\n"
                  "\n"
                  "iss runs the program in the instruction-set simulator.\n"
                  "  --max-steps N   stop after N instructions (default %llu)\n"
                  "  --trace FILE    write the CSV retire trace to FILE\n"
+                 "  --regs FILE     write x0 to x31 as they are when the run ends to FILE\n"
                  "\n"
                  "elf2hex writes the RAM as the program fills it: one 32-bit word on each\n"
                  "line, 8 hex digits, from the first word of the RAM to the last.\n"
@@ -91,6 +93,7 @@ bool parseCount(const char* text, std::uint64_t& value) {
 struct IssOptions {
     std::string elfPath;
     std::string tracePath;  // empty: no trace
+    std::string regsPath;   // empty: no register dump
     std::uint64_t maxSteps = kDefaultMaxSteps;
 };
 
@@ -110,6 +113,13 @@ bool parseIssOptions(int count, char** args, IssOptions& options) {
                 return false;
             }
             options.tracePath = args[i + 1];
+            ++i;
+        } else if (arg == "--regs") {
+            if (i + 1 >= count) {
+                std::fprintf(stderr, "florv: --regs needs a file name\n");
+                return false;
+            }
+            options.regsPath = args[i + 1];
             ++i;
         } else if (!arg.empty() && arg[0] == '-') {
             std::fprintf(stderr, "florv: unknown option %s\n", arg.c_str());
@@ -177,6 +187,19 @@ int runIss(const IssOptions& options) {
         std::fprintf(trace, "%s\n", florv::kTraceCsvHeader);
     }
 
+    // Opened before the run, so that a file that cannot be written is reported at once.
+    std::FILE* regs = nullptr;
+    if (!options.regsPath.empty()) {
+        regs = std::fopen(options.regsPath.c_str(), "wb");
+        if (regs == nullptr) {
+            std::fprintf(stderr, "florv: cannot write %s\n", options.regsPath.c_str());
+            if (trace != nullptr) {
+                std::fclose(trace);
+            }
+            return kExitUsage;
+        }
+    }
+
     florv::StepStatus status = florv::StepStatus::Ok;
     florv::RetireRecord last;
     while (status == florv::StepStatus::Ok && iss.retired() < options.maxSteps) {
@@ -194,6 +217,19 @@ int runIss(const IssOptions& options) {
         const bool writeFailed = std::ferror(trace) != 0;
         if (std::fclose(trace) != 0 || writeFailed) {
             std::fprintf(stderr, "florv: error writing %s\n", options.tracePath.c_str());
+            return kExitUsage;
+        }
+    }
+
+    // The registers as the run left them, however it ended: 32 lines, "x5 0000000d".
+    // tb_core writes the same file for the VHDL core (docs/regs-format.md).
+    if (regs != nullptr) {
+        for (unsigned i = 0; i < 32; ++i) {
+            std::fprintf(regs, "x%u %08x\n", i, static_cast<unsigned>(iss.reg(i)));
+        }
+        const bool writeFailed = std::ferror(regs) != 0;
+        if (std::fclose(regs) != 0 || writeFailed) {
+            std::fprintf(stderr, "florv: error writing %s\n", options.regsPath.c_str());
             return kExitUsage;
         }
     }

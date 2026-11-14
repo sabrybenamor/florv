@@ -1,8 +1,18 @@
 library ieee;
 use ieee.std_logic_1164.all;
+
+use work.rv32i_pkg.all;
+
+package regfile_pkg is
+    type reg_array_t is array (0 to 31) of word_t;
+end package regfile_pkg;
+
+library ieee;
+use ieee.std_logic_1164.all;
 use ieee.numeric_std.all;
 
 use work.rv32i_pkg.all;
+use work.regfile_pkg.all;
 
 entity regfile is
     port (
@@ -24,7 +34,6 @@ architecture rtl of regfile is
 
     constant X0 : reg_addr_t := "00000";
 
-    type reg_array_t is array (0 to 31) of word_t;
     signal regs : reg_array_t := (others => (others => '0'));
 
 begin

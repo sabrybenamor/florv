@@ -88,6 +88,12 @@ florv_cli_test(no_arguments  4 "")
 florv_cli_test(no_elf_given  4 "iss")
 florv_cli_test(bad_max_steps 4 "iss|${FLORV_DATA}/minimal.elf|--max-steps|many")
 
+# --regs writes the final registers. Only the exit code is checked here; the
+# content is compared with the VHDL core's dump (tb_core with REGS_FILE).
+florv_cli_test(regs            0 "iss|${FLORV_DATA}/minimal.elf|--regs|${CMAKE_BINARY_DIR}/minimal.regs.txt" "tohost:  1")
+florv_cli_test(regs_no_file    4 "iss|${FLORV_DATA}/minimal.elf|--regs")
+florv_cli_test(regs_bad_output 4 "iss|${FLORV_DATA}/minimal.elf|--regs|${CMAKE_BINARY_DIR}/no_such_folder/regs.txt")
+
 # elf2hex: 0 the file is written, 3 a bad ELF, 4 a wrong command line or an
 # output file that cannot be written (here: in a folder that does not exist).
 florv_cli_test(elf2hex            0 "elf2hex|${FLORV_DATA}/minimal.elf|${CMAKE_BINARY_DIR}/minimal.hex" "wrote 16384 words")

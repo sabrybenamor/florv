@@ -84,6 +84,8 @@ if errorlevel 1 goto failed_compile
 echo sim: elaborating %NAME%
 call xelab -debug typical -nolog %GENERICS% %NAME% -s %NAME%_sim
 if errorlevel 1 goto failed_elaborate
+rem xelab can crash and still exit with 0; then it has built no simulator.
+if not exist "xsim.dir\%NAME%_sim\xsimk.exe" goto failed_elaborate
 
 echo sim: running %NAME%
 call xsim %NAME%_sim -runall -log "%NAME%.log"
@@ -107,7 +109,7 @@ exit /b 1
 
 :failed_elaborate
 popd
-echo sim: FAILED, xelab could not build %NAME%. Is the file in the list in tools\sim.bat?
+echo sim: FAILED, xelab could not build %NAME%. See its messages above; is the file in the list in tools\sim.bat?
 exit /b 1
 
 :failed_run

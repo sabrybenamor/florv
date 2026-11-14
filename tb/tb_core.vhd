@@ -18,6 +18,14 @@
 --
 -- The testbench does not check the instructions one by one; tb_rv_core and
 -- tb_rv_core_insns do that. It checks that a whole program reaches its end.
+--
+-- With the generic REGS_FILE set, a run that passes also writes x0 to x31 to that
+-- file, in the format of docs/regs-format.md. "florv iss prog.elf --regs FILE"
+-- writes the same file from the ISS, and the two must be equal byte for byte:
+--
+--     tools\sim.bat tb_core "HEX_FILE=..." "TOHOST_ADDR=800000c0" "REGS_FILE=C:/work/florv/tests/build/fib_loop.rtl.regs.txt"
+--     build\florv.exe iss tests\build\fib_loop.elf --regs tests\build\fib_loop.iss.regs.txt
+--     fc /b tests\build\fib_loop.rtl.regs.txt tests\build\fib_loop.iss.regs.txt
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -26,11 +34,13 @@ use ieee.numeric_std.all;
 use std.textio.all;
 
 use work.rv32i_pkg.all;
+use work.regfile_pkg.all;
 
 entity tb_core is
     generic (
         HEX_FILE     : string   := "";
         TOHOST_ADDR  : string   := "80000040";
+        REGS_FILE    : string   := "";  -- empty: no register dump
         READ_LATENCY : positive := 1;
         MAX_CYCLES   : positive := 1000000
     );
@@ -102,6 +112,40 @@ architecture sim of tb_core is
     end function;
 
     constant TOHOST : word_t := tohost_word;
+
+
+    procedure dump_regs(path : in string; regs : in reg_array_t) is
+        type char_file_t is file of character;
+        file f          : char_file_t;
+        variable status : file_open_status;
+
+        constant DIGITS : string(1 to 16) := "0123456789abcdef";
+
+        procedure put(s : in string) is
+        begin
+            for i in s'range loop
+                write(f, s(i));
+            end loop;
+        end procedure;
+    begin
+        if path'length = 0 then
+            return;  -- no file asked for
+        end if;
+
+        file_open(status, f, path, write_mode);
+        assert status = open_ok
+            report "tb_core: cannot write the register file " & path
+            severity failure;
+
+        for r in regs'range loop
+            put("x" & integer'image(r) & " ");
+            for nibble in 7 downto 0 loop
+                write(f, DIGITS(to_integer(unsigned(regs(r)(4 * nibble + 3 downto 4 * nibble))) + 1));
+            end loop;
+            write(f, LF);
+        end loop;
+        file_close(f);
+    end procedure;
 
     signal clk  : std_logic := '0';
     signal rstn : std_logic := '0';
@@ -245,6 +289,13 @@ begin
                         report "tb_core: tohost=" & to_hstring(retire_mem_wdata) & " (hex) after " &
                                integer'image(retires) & " retires; the program reports a failure"
                         severity failure;
+                    -- The registers are read inside the core's register file. They
+                    -- are final here: the instruction retiring now is a store, which
+                    -- writes no register, and every earlier write is already in.
+                    -- The call is not inside "if REGS_FILE'length > 0": with the
+                    -- generic empty, xelab 2025.2 crashes on an external name in a
+                    -- branch it knows is never taken. dump_regs tests the name itself.
+                    dump_regs(REGS_FILE, << signal dut.u_regfile.regs : reg_array_t >>);
                     report "tb_core: PASS, tohost=1 after " & integer'image(retires) &
                            " retires, " & integer'image(cycles) & " cycles";
                     std.env.finish;
