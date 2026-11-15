@@ -64,6 +64,7 @@ set FILES=%FILES% "%ROOT%\tb\tb_imm_gen.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_decode.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_rv_core.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_rv_core_insns.vhd"
+set FILES=%FILES% "%ROOT%\tb\trace_logger.vhd"
 set FILES=%FILES% "%ROOT%\tb\tb_core.vhd"
 
 set "OUT=%ROOT%\sim_out"

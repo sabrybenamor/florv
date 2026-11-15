@@ -26,6 +26,15 @@
 --     tools\sim.bat tb_core "HEX_FILE=..." "TOHOST_ADDR=800000c0" "REGS_FILE=C:/work/florv/tests/build/fib_loop.rtl.regs.txt"
 --     build\florv.exe iss tests\build\fib_loop.elf --regs tests\build\fib_loop.iss.regs.txt
 --     fc /b tests\build\fib_loop.rtl.regs.txt tests\build\fib_loop.iss.regs.txt
+--
+-- With the generic TRACE_FILE set, every retire is written to that file by
+-- trace_logger, in the CSV format of docs/trace-format.md. It is written on a
+-- failed run too, up to the last retire. "florv iss prog.elf --trace FILE" writes
+-- the same file from the ISS:
+--
+--     tools\sim.bat tb_core "HEX_FILE=..." "TOHOST_ADDR=800000c0" "TRACE_FILE=C:/work/florv/tests/build/fib_loop.rtl.csv"
+--     build\florv.exe iss tests\build\fib_loop.elf --trace tests\build\fib_loop.iss.csv
+--     fc /b tests\build\fib_loop.rtl.csv tests\build\fib_loop.iss.csv
 
 library ieee;
 use ieee.std_logic_1164.all;
@@ -41,6 +50,7 @@ entity tb_core is
         HEX_FILE     : string   := "";
         TOHOST_ADDR  : string   := "80000040";
         REGS_FILE    : string   := "";  -- empty: no register dump
+        TRACE_FILE   : string   := "";  -- empty: no retire trace
         READ_LATENCY : positive := 1;
         MAX_CYCLES   : positive := 1000000
     );
@@ -174,6 +184,12 @@ architecture sim of tb_core is
     -- The read data on its way out: read_pipe(READ_LATENCY) is mem_rdata.
     signal read_pipe : word_array_t(1 to READ_LATENCY) := (others => (others => 'X'));
 
+    -- Set by the monitor when the tohost store retires; finish_run ends the run.
+    signal ended       : boolean := false;
+    signal end_tohost  : word_t  := (others => '0');
+    signal end_retires : natural := 0;
+    signal end_cycles  : natural := 0;
+
 begin
 
     clk <= not clk after CLK_PERIOD / 2;
@@ -205,6 +221,26 @@ begin
             retire_is_load   => retire_is_load,
             retire_is_store  => retire_is_store,
             trap             => trap
+        );
+
+    -- The retire trace, when TRACE_FILE names a file.
+    u_trace : entity work.trace_logger
+        generic map (
+            TRACE_FILE => TRACE_FILE
+        )
+        port map (
+            clk              => clk,
+            retire_valid     => retire_valid,
+            retire_pc        => retire_pc,
+            retire_insn      => retire_insn,
+            retire_next_pc   => retire_next_pc,
+            retire_rd        => retire_rd,
+            retire_rd_wdata  => retire_rd_wdata,
+            retire_mem_addr  => retire_mem_addr,
+            retire_mem_mask  => retire_mem_mask,
+            retire_mem_wdata => retire_mem_wdata,
+            retire_is_load   => retire_is_load,
+            retire_is_store  => retire_is_store
         );
 
     -- The RAM, the same model as in tb_rv_core but 64 KiB and filled from the hex
@@ -263,9 +299,12 @@ begin
         wait;
     end process stimulus;
 
-    -- Watches the retire group and ends the run. The tohost rule is the one of
-    -- the ISS: a word store of a non-zero value to the tohost address, seen when
-    -- the store retires.
+    -- Watches the retire group. The tohost rule is the one of the ISS: a word
+    -- store of a non-zero value to the tohost address, seen when the store
+    -- retires. The monitor does not end the run itself: it sets "ended", and
+    -- finish_run acts one delta cycle later. By then trace_logger, which runs on
+    -- the same clock edge in no fixed order with this process, has written the
+    -- line of the store.
     monitor : process (clk)
         variable cycles  : natural := 0;
         variable retires : natural := 0;
@@ -285,20 +324,10 @@ begin
 
                 if retire_is_store = '1' and retire_mem_addr = TOHOST and
                    retire_mem_mask = "1111" and retire_mem_wdata /= x"00000000" then
-                    assert retire_mem_wdata = x"00000001"
-                        report "tb_core: tohost=" & to_hstring(retire_mem_wdata) & " (hex) after " &
-                               integer'image(retires) & " retires; the program reports a failure"
-                        severity failure;
-                    -- The registers are read inside the core's register file. They
-                    -- are final here: the instruction retiring now is a store, which
-                    -- writes no register, and every earlier write is already in.
-                    -- The call is not inside "if REGS_FILE'length > 0": with the
-                    -- generic empty, xelab 2025.2 crashes on an external name in a
-                    -- branch it knows is never taken. dump_regs tests the name itself.
-                    dump_regs(REGS_FILE, << signal dut.u_regfile.regs : reg_array_t >>);
-                    report "tb_core: PASS, tohost=1 after " & integer'image(retires) &
-                           " retires, " & integer'image(cycles) & " cycles";
-                    std.env.finish;
+                    end_tohost  <= retire_mem_wdata;
+                    end_retires <= retires;
+                    end_cycles  <= cycles;
+                    ended       <= true;
                 end if;
             end if;
 
@@ -309,5 +338,27 @@ begin
                 severity failure;
         end if;
     end process monitor;
+
+    -- Ends the run after the tohost store, one delta cycle after the clock edge
+    -- on which it retired.
+    finish_run : process (ended)
+    begin
+        if ended then
+            assert end_tohost = x"00000001"
+                report "tb_core: tohost=" & to_hstring(end_tohost) & " (hex) after " &
+                       integer'image(end_retires) & " retires; the program reports a failure"
+                severity failure;
+            -- The registers are read inside the core's register file. They are
+            -- final here: the instruction that just retired is a store, which
+            -- writes no register, and every earlier write is already in.
+            -- The call is not inside "if REGS_FILE'length > 0": with the generic
+            -- empty, xelab 2025.2 crashes on an external name in a branch it knows
+            -- is never taken. dump_regs tests the name itself.
+            dump_regs(REGS_FILE, << signal dut.u_regfile.regs : reg_array_t >>);
+            report "tb_core: PASS, tohost=1 after " & integer'image(end_retires) &
+                   " retires, " & integer'image(end_cycles) & " cycles";
+            std.env.finish;
+        end if;
+    end process finish_run;
 
 end architecture sim;
