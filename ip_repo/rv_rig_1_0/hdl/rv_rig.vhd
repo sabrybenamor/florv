@@ -17,6 +17,20 @@ entity rv_rig is
 	port (
 		-- Users to add ports here
 
+		-- The core's memory port, for port B of the program RAM. The names follow
+		-- the BRAM interface: din is the data written into the RAM, dout the data
+		-- read from it. mem_addr is a byte address whose bits 1:0 are always "00";
+		-- the RAM ignores the bits above its size. mem_we has one bit per byte and
+		-- is "0000" on a read. The RAM must answer a read after one clock edge
+		-- (no output register).
+		mem_clk	: out std_logic;
+		mem_rst	: out std_logic;
+		mem_en	: out std_logic;
+		mem_we	: out std_logic_vector(3 downto 0);
+		mem_addr	: out std_logic_vector(31 downto 0);
+		mem_din	: out std_logic_vector(31 downto 0);
+		mem_dout	: in std_logic_vector(31 downto 0);
+
 		-- User ports ends
 		-- Do not modify the ports beyond this line
 
@@ -55,6 +69,11 @@ architecture arch_imp of rv_rig is
 		C_S_AXI_ADDR_WIDTH	: integer	:= 5
 		);
 		port (
+		ctrl_run	: out std_logic;
+		ctrl_reset	: out std_logic;
+		status	: in std_logic_vector(31 downto 0);
+		last_pc	: in std_logic_vector(31 downto 0);
+		retire_count	: in std_logic_vector(31 downto 0);
 		S_AXI_ACLK	: in std_logic;
 		S_AXI_ARESETN	: in std_logic;
 		S_AXI_AWADDR	: in std_logic_vector(C_S_AXI_ADDR_WIDTH-1 downto 0);
@@ -79,6 +98,21 @@ architecture arch_imp of rv_rig is
 		);
 	end component rv_rig_slave_lite_v1_0_S00_AXI;
 
+	-- The registers and the core (docs/regmap.md)
+	signal ctrl_run	: std_logic;
+	signal ctrl_reset	: std_logic;
+	signal status	: std_logic_vector(31 downto 0);
+	signal last_pc	: std_logic_vector(31 downto 0);
+	signal retire_count	: std_logic_vector(31 downto 0);
+
+	signal core_rstn	: std_logic;
+	signal core_mem_we	: std_logic;
+	signal core_mem_be	: std_logic_vector(3 downto 0);
+	signal core_trap	: std_logic;
+	signal retire_valid	: std_logic;
+	signal retire_pc	: std_logic_vector(31 downto 0);
+	signal retire_next_pc	: std_logic_vector(31 downto 0);
+
 begin
 
 -- Instantiation of Axi Bus Interface S00_AXI
@@ -88,6 +122,11 @@ rv_rig_slave_lite_v1_0_S00_AXI_inst : rv_rig_slave_lite_v1_0_S00_AXI
 		C_S_AXI_ADDR_WIDTH	=> C_S00_AXI_ADDR_WIDTH
 	)
 	port map (
+		ctrl_run	=> ctrl_run,
+		ctrl_reset	=> ctrl_reset,
+		status	=> status,
+		last_pc	=> last_pc,
+		retire_count	=> retire_count,
 		S_AXI_ACLK	=> s00_axi_aclk,
 		S_AXI_ARESETN	=> s00_axi_aresetn,
 		S_AXI_AWADDR	=> s00_axi_awaddr,
@@ -112,6 +151,62 @@ rv_rig_slave_lite_v1_0_S00_AXI_inst : rv_rig_slave_lite_v1_0_S00_AXI
 	);
 
 	-- Add user logic here
+
+	-- The core is in reset while the bus is, or while CTRL.RESET is 1.
+	core_rstn <= s00_axi_aresetn and not ctrl_reset;
+
+	-- The RISC-V core. Its retire outputs that nothing reads yet (they are for the
+	-- trace writer of revision 3) are left open.
+	u_core : entity work.rv_core
+		generic map (
+			RESET_PC	=> x"80000000",
+			READ_LATENCY	=> 1
+		)
+		port map (
+			clk	=> s00_axi_aclk,
+			rstn	=> core_rstn,
+			run	=> ctrl_run,
+			mem_en	=> mem_en,
+			mem_we	=> core_mem_we,
+			mem_addr	=> mem_addr,
+			mem_be	=> core_mem_be,
+			mem_wdata	=> mem_din,
+			mem_rdata	=> mem_dout,
+			retire_valid	=> retire_valid,
+			retire_pc	=> retire_pc,
+			retire_insn	=> open,
+			retire_next_pc	=> retire_next_pc,
+			retire_rd	=> open,
+			retire_rd_wdata	=> open,
+			retire_mem_addr	=> open,
+			retire_mem_mask	=> open,
+			retire_mem_wdata	=> open,
+			retire_is_load	=> open,
+			retire_is_store	=> open,
+			trap	=> core_trap
+		);
+
+	-- The RAM has no separate write signal: a byte is written when its bit of
+	-- mem_we is 1. The core already gives "0000" on a read; core_mem_we is and-ed
+	-- in so that this does not rest on that alone.
+	mem_we  <= core_mem_be when core_mem_we = '1' else "0000";
+	mem_clk <= s00_axi_aclk;
+	mem_rst <= '0';
+
+	-- STATUS, LAST_PC and RETIRE_COUNT
+	u_status : entity work.core_status
+		port map (
+			clk	=> s00_axi_aclk,
+			rstn	=> core_rstn,
+			run	=> ctrl_run,
+			retire_valid	=> retire_valid,
+			retire_pc	=> retire_pc,
+			retire_next_pc	=> retire_next_pc,
+			trap	=> core_trap,
+			status	=> status,
+			last_pc	=> last_pc,
+			retire_count	=> retire_count
+		);
 
 	-- User logic ends
 

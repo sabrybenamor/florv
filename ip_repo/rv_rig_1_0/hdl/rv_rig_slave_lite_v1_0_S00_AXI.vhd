@@ -17,6 +17,16 @@ entity rv_rig_slave_lite_v1_0_S00_AXI is
 	port (
 		-- Users to add ports here
 
+		-- CTRL bits, to the core (docs/regmap.md)
+		ctrl_run	: out std_logic;
+		ctrl_reset	: out std_logic;
+		-- Read-only registers, from the logic around the core. The value on the
+		-- input is what a read returns. The defaults let the block be built
+		-- without the core: the three registers then read as 0.
+		status	: in std_logic_vector(31 downto 0) := (others => '0');
+		last_pc	: in std_logic_vector(31 downto 0) := (others => '0');
+		retire_count	: in std_logic_vector(31 downto 0) := (others => '0');
+
 		-- User ports ends
 		-- Do not modify the ports beyond this line
 
@@ -106,15 +116,10 @@ architecture arch_imp of rv_rig_slave_lite_v1_0_S00_AXI is
 	------------------------------------------------
 	---- Signals for user logic register space example
 	--------------------------------------------------
-	---- Number of Slave Registers 8
-	signal slv_reg0	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
-	signal slv_reg1	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
-	signal slv_reg2	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
-	signal slv_reg3	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
-	signal slv_reg4	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
-	signal slv_reg5	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
-	signal slv_reg6	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
-	signal slv_reg7	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);
+	---- Number of Slave Registers 8 (docs/regmap.md); only two of them are stored here
+	signal scratch_reg	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);	-- register 1, SCRATCH
+	signal ctrl_reg	:std_logic_vector(1 downto 0);	-- register 2, CTRL: bit 0 RUN, bit 1 RESET
+	signal ctrl_word	:std_logic_vector(C_S_AXI_DATA_WIDTH-1 downto 0);	-- CTRL as it is read
 	signal byte_index	: integer;
 
 	 signal mem_logic  : std_logic_vector(ADDR_LSB + OPT_MEM_ADDR_BITS downto ADDR_LSB);
@@ -128,7 +133,7 @@ architecture arch_imp of rv_rig_slave_lite_v1_0_S00_AXI is
 
 	 -- Register 0 is a read-only ID: "RV" in the high half, revision in the low half.
 	 -- Bump the revision whenever the fabric changes (0002 core, 0003 trace RAM).
-	constant C_RIG_ID : std_logic_vector(31 downto 0) := x"52560001";
+	constant C_RIG_ID : std_logic_vector(31 downto 0) := x"52560002";
 	 --State machine variables
 	signal state_read : std_logic_vector(1 downto 0);
 	signal state_write: std_logic_vector(1 downto 0); 
@@ -213,94 +218,32 @@ begin
 	-- and the slave is ready to accept the write address and write data.
 	
 
+	-- Only SCRATCH (register 1) and CTRL (register 2) are stored. A write to any other
+	-- register changes nothing; the write state machine above still answers OKAY.
 	process (S_AXI_ACLK)
 	begin
 	  if rising_edge(S_AXI_ACLK) then 
 	    if S_AXI_ARESETN = '0' then
-	      slv_reg0 <= (others => '0');
-	      slv_reg1 <= (others => '0');
-	      slv_reg2 <= (others => '0');
-	      slv_reg3 <= (others => '0');
-	      slv_reg4 <= (others => '0');
-	      slv_reg5 <= (others => '0');
-	      slv_reg6 <= (others => '0');
-	      slv_reg7 <= (others => '0');
+	      scratch_reg <= (others => '0');
+	      -- RESET = 1, RUN = 0: the core is held in reset until the ARM releases it.
+	      ctrl_reg    <= "10";
 	    else
 	      if (S_AXI_WVALID = '1') then
 	          case (mem_logic) is
-	          when b"000" =>
-	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
-	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
-	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 0
-	                slv_reg0(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
-	              end if;
-	            end loop;
 	          when b"001" =>
 	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
 	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
 	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 1
-	                slv_reg1(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
+	                scratch_reg(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
 	              end if;
 	            end loop;
 	          when b"010" =>
-	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
-	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
-	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 2
-	                slv_reg2(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
-	              end if;
-	            end loop;
-	          when b"011" =>
-	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
-	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
-	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 3
-	                slv_reg3(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
-	              end if;
-	            end loop;
-	          when b"100" =>
-	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
-	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
-	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 4
-	                slv_reg4(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
-	              end if;
-	            end loop;
-	          when b"101" =>
-	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
-	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
-	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 5
-	                slv_reg5(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
-	              end if;
-	            end loop;
-	          when b"110" =>
-	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
-	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
-	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 6
-	                slv_reg6(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
-	              end if;
-	            end loop;
-	          when b"111" =>
-	            for byte_index in 0 to (C_S_AXI_DATA_WIDTH/8-1) loop
-	              if ( S_AXI_WSTRB(byte_index) = '1' ) then
-	                -- Respective byte enables are asserted as per write strobes                   
-	                -- slave registor 7
-	                slv_reg7(byte_index*8+7 downto byte_index*8) <= S_AXI_WDATA(byte_index*8+7 downto byte_index*8);
-	              end if;
-	            end loop;
+	            -- Both bits of CTRL are in byte 0.
+	            if ( S_AXI_WSTRB(0) = '1' ) then
+	              ctrl_reg <= S_AXI_WDATA(1 downto 0);
+	            end if;
 	          when others =>
-	            slv_reg0 <= slv_reg0;
-	            slv_reg1 <= slv_reg1;
-	            slv_reg2 <= slv_reg2;
-	            slv_reg3 <= slv_reg3;
-	            slv_reg4 <= slv_reg4;
-	            slv_reg5 <= slv_reg5;
-	            slv_reg6 <= slv_reg6;
-	            slv_reg7 <= slv_reg7;
+	            null;
 	        end case;
 	      end if;
 	    end if;
@@ -350,15 +293,23 @@ begin
 	       end if;                                                   
 	  end process;                                          
 	-- Implement memory mapped register select and read logic generation
+	-- The registers of docs/regmap.md. STATUS, LAST_PC and RETIRE_COUNT are not stored
+	-- here: they are the inputs of the same name, read as they are at this moment.
+	-- TRACE_HEAD and TRACE_TAIL (6 and 7) are reserved and read as 0.
 	 S_AXI_RDATA <= C_RIG_ID when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "000" ) else 
-	 slv_reg1 when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "001" ) else 
-	 slv_reg2 when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "010" ) else 
-	 slv_reg3 when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "011" ) else 
-	 slv_reg4 when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "100" ) else 
-	 slv_reg5 when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "101" ) else 
-	 slv_reg6 when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "110" ) else 
-	 slv_reg7 when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "111" ) else 
+	 scratch_reg when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "001" ) else 
+	 ctrl_word when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "010" ) else 
+	 status when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "011" ) else 
+	 last_pc when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "100" ) else 
+	 retire_count when (axi_araddr(ADDR_LSB+OPT_MEM_ADDR_BITS downto ADDR_LSB) = "101" ) else 
 	 (others => '0');
+
+	-- CTRL has two bits; bits 31:2 read as 0.
+	ctrl_word(31 downto 2) <= (others => '0');
+	ctrl_word(1 downto 0)  <= ctrl_reg;
+
+	ctrl_run   <= ctrl_reg(0);
+	ctrl_reset <= ctrl_reg(1);
 
 	-- Add user logic here
 
